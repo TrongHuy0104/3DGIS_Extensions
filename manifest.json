@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "Ctrl+Z Undo Coordinate",
+  "description": "Xóa từng coordinate khi nhấn Ctrl+Z trên bản đồ OpenLayers tại 3dg.vn",
+  "version": "1.0",
+  "permissions": [],
+  "content_scripts": [
+    {
+      "matches": ["https://3dg.vn/*", "https://*.3dg.vn/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["inject.js"],
+      "matches": ["https://3dg.vn/*", "https://*.3dg.vn/*"]
+    }
+  ],
+  "icons": {}
+}
