@@ -13,7 +13,7 @@
   ],
   "web_accessible_resources": [
     {
-      "resources": ["inject.js", "autosave.js"],
+      "resources": ["inject.js", "autosave.js", "selection.js"],
       "matches": ["https://3dg.vn/*", "https://*.3dg.vn/*"]
     }
   ],

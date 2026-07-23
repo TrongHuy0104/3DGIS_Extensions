@@ -1,5 +1,5 @@
 // Content script: inject code vào page context (MAIN world)
-['inject.js', 'autosave.js'].forEach(file => {
+['inject.js', 'autosave.js', 'selection.js'].forEach(file => {
     const script = document.createElement('script');
     script.src = chrome.runtime.getURL(file);
     script.onload = function () { this.remove(); };
