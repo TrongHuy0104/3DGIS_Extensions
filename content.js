@@ -1,6 +1,6 @@
 // Content script: inject code vào page context (MAIN world)
 // Load tuần tự để đảm bảo inject.js setup shared globals trước
-const scripts = ['inject.js', 'autosave.js', 'selection.js', 'panel-autohide.js', 'snapping.js'];
+const scripts = ['inject.js', 'autosave.js', 'selection.js', 'panel-autohide.js', 'snapping.js', 'taskbar.js'];
 
 function injectNext(index) {
     if (index >= scripts.length) return;

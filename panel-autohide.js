@@ -98,6 +98,9 @@
         mouseX = e.clientX;
         if (!panelWrapper || !document.body.contains(panelWrapper)) return;
 
+        // Don't auto-hide while user is interacting with the taskbar
+        if (window.__taskbarHovered) return;
+
         if (!isVisible && mouseX <= TRIGGER_ZONE) {
             showPanel();
             log('→ Show (mouse at', mouseX, ')');
