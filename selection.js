@@ -21,16 +21,10 @@
     const HIGHLIGHT_FILL  = 'rgba(0, 200, 255, 0.15)';
 
     // ==================== TÌM MAP ====================
-    // Reuse từ window nếu inject.js/autosave.js đã tìm trước
-    (function waitForMap() {
-        if (!document.querySelector('.ol-viewport')) {
-            setTimeout(waitForMap, 1000);
-            return;
-        }
-        setTimeout(initSelection, 3500);
-    })();
-
+    // Dùng shared findOlMap từ inject.js
     function findOlMap() {
+        if (window.__findOlMap) return window.__findOlMap();
+        // Fallback
         const viewport = document.querySelector('.ol-viewport');
         if (!viewport) return null;
         let el = viewport.parentElement;
@@ -58,6 +52,28 @@
         return null;
     }
 
+    // Ưu tiên listen event từ inject.js
+    if (window.__olMap) {
+        setTimeout(initSelection, 500);
+    } else {
+        document.addEventListener('3dg:map-ready', () => {
+            setTimeout(initSelection, 500);
+        }, { once: true });
+        // Safety fallback
+        setTimeout(() => {
+            if (!olMap) {
+                log('⚠️ map-ready event not received, falling back to poll');
+                (function waitForMap() {
+                    if (!document.querySelector('.ol-viewport')) {
+                        setTimeout(waitForMap, 1000);
+                        return;
+                    }
+                    setTimeout(initSelection, 3500);
+                })();
+            }
+        }, 10000);
+    }
+
     // ==================== INJECT CSS ====================
     function injectSelectionStyles() {
         const style = document.createElement('style');
@@ -71,60 +87,8 @@
                 border-radius: 3px;
                 box-shadow: 0 0 12px rgba(0, 200, 255, 0.25);
             }
-            #sel-toolbar {
-                position: fixed;
-                top: 16px;
-                left: 50%;
-                transform: translateX(-50%) translateY(-120%);
-                z-index: 99998;
-                display: flex;
-                align-items: center;
-                gap: 10px;
-                padding: 10px 18px;
-                background: rgba(15, 23, 42, 0.92);
-                backdrop-filter: blur(20px);
-                -webkit-backdrop-filter: blur(20px);
-                border: 1px solid rgba(0, 200, 255, 0.2);
-                border-radius: 12px;
-                box-shadow: 0 8px 32px rgba(0,0,0,0.4), 0 0 0 1px rgba(0,200,255,0.1);
-                font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
-                font-size: 13px;
-                color: #e2e8f0;
-                transition: transform .35s cubic-bezier(.4,0,.2,1), opacity .35s cubic-bezier(.4,0,.2,1);
-                opacity: 0;
-                pointer-events: none;
-            }
-            #sel-toolbar.visible {
-                transform: translateX(-50%) translateY(0);
-                opacity: 1;
-                pointer-events: auto;
-            }
-            #sel-toolbar .sel-count {
-                display: flex; align-items: center; gap: 6px;
-                font-weight: 600; color: ${HIGHLIGHT_COLOR}; white-space: nowrap;
-            }
-            #sel-toolbar .sel-count .sel-icon { font-size: 16px; }
-            #sel-toolbar .sel-divider {
-                width: 1px; height: 22px;
-                background: rgba(255,255,255,0.1); flex-shrink: 0;
-            }
-            #sel-toolbar .sel-btn {
-                display: flex; align-items: center; gap: 6px;
-                padding: 7px 14px;
-                border: 1px solid rgba(255,255,255,0.08);
-                border-radius: 8px;
-                background: rgba(255,255,255,0.04);
-                color: #e2e8f0; cursor: pointer;
-                font-size: 12px; font-family: inherit; white-space: nowrap;
-                transition: all .15s ease;
-            }
-            #sel-toolbar .sel-btn:hover {
-                background: rgba(255,255,255,0.1);
-                border-color: rgba(255,255,255,0.15);
-                transform: translateY(-1px);
-            }
-            #sel-toolbar .sel-btn.danger { color: #fca5a5; border-color: rgba(239,68,68,0.2); }
-            #sel-toolbar .sel-btn.danger:hover { background: rgba(239,68,68,0.15); border-color: rgba(239,68,68,0.3); }
+
+
             #sel-toast-container {
                 position: fixed; top: 70px; left: 50%;
                 transform: translateX(-50%); z-index: 100000;
@@ -153,50 +117,16 @@
     }
 
     // ==================== UI ====================
-    function createToolbar() {
-        const toolbar = document.createElement('div');
-        toolbar.id = 'sel-toolbar';
-        toolbar.innerHTML = `
-            <div class="sel-count">
-                <span class="sel-icon">🔲</span>
-                <span id="sel-count-text">0 features</span>
-            </div>
-            <div class="sel-divider"></div>
-            <button class="sel-btn danger" id="sel-btn-delete">🗑️ Xóa tất cả</button>
-            <button class="sel-btn" id="sel-btn-export">📥 Export</button>
-            <button class="sel-btn" id="sel-btn-deselect">✖️ Bỏ chọn</button>
-        `;
-        document.body.appendChild(toolbar);
-
+    function createToastContainer() {
         // Toast container (tránh tạo trùng)
         if (!document.getElementById('sel-toast-container')) {
             const tc = document.createElement('div');
             tc.id = 'sel-toast-container';
             document.body.appendChild(tc);
         }
-
-        // Delegate events trên toolbar thay vì bind từng nút
-        toolbar.addEventListener('click', (e) => {
-            const btn = e.target.closest('.sel-btn');
-            if (!btn) return;
-            e.stopPropagation();
-            if (btn.id === 'sel-btn-delete')   deleteSelectedFeatures();
-            if (btn.id === 'sel-btn-export')   exportSelectedFeatures();
-            if (btn.id === 'sel-btn-deselect') clearSelection();
-        });
     }
 
-    function showToolbar(count) {
-        const toolbar = document.getElementById('sel-toolbar');
-        const countText = document.getElementById('sel-count-text');
-        if (!toolbar || !countText) return;
-        countText.textContent = `${count} feature${count > 1 ? 's' : ''}`;
-        toolbar.classList.add('visible');
-    }
 
-    function hideToolbar() {
-        document.getElementById('sel-toolbar')?.classList.remove('visible');
-    }
 
     function showSelToast(msg, type = 'info') {
         const container = document.getElementById('sel-toast-container');
@@ -304,26 +234,56 @@
             try { entry.feature.setStyle(entry.originalStyle); } catch (e) {}
         }
         selectedFeatures.length = 0;
-        hideToolbar();
         olMap?.render?.();
     }
+
+    // Expose cho inject.js gọi khi Ctrl+Z
+    window.__clearSelection = clearSelection;
 
     function deleteSelectedFeatures() {
         const count = selectedFeatures.length;
         if (!count) return;
 
         let deleted = 0;
+        const undoFeatures = []; // Thu thập info để undo batch
 
         for (const entry of selectedFeatures) {
             try {
                 const fid = entry.featureId || entry.feature.getId?.();
                 let done = false;
 
+                // Lưu thông tin feature trước khi xóa (để Ctrl+Z khôi phục)
+                if (fid) {
+                    try {
+                        const geom = entry.feature.getGeometry();
+                        const type = geom.getType();
+                        const coords = geom.getCoordinates();
+                        let savedCoords;
+                        if (type === 'Polygon') {
+                            savedCoords = coords[0].slice(0, -1); // bỏ closing point
+                        } else if (type === 'LineString') {
+                            savedCoords = coords;
+                        } else {
+                            savedCoords = [coords];
+                        }
+                        undoFeatures.push({
+                            action: 'deleteFeature',
+                            featureId: fid,
+                            coords: savedCoords,
+                            geomType: type
+                        });
+                    } catch (e) { log('Failed to save feature info:', e); }
+                }
+
                 // Ưu tiên xóa qua DOM (React sync)
                 if (fid) {
-                    const row = document.querySelector(`div[data-feature-id="${fid}"]`);
-                    const btn = row?.querySelector('button.ant-btn-dangerous');
-                    if (btn) { btn.click(); done = true; }
+                    const deleteByDOM = window.__deleteFeatureByDOM || ((id) => {
+                        const row = document.querySelector(`div[data-feature-id="${id}"]`);
+                        const btn = row?.querySelector('button.ant-btn-dangerous');
+                        if (btn) { btn.click(); return true; }
+                        return false;
+                    });
+                    done = deleteByDOM(fid);
                 }
 
                 // Fallback: xóa trực tiếp từ OL source
@@ -335,11 +295,21 @@
             }
         }
 
+        // Push vào __undoStack (dành cho Ctrl+Z) — 1 entry cho cả batch
+        if (undoFeatures.length > 0 && window.__undoStack) {
+            window.__undoStack.push({
+                action: 'bulkDelete',
+                features: undoFeatures
+            });
+        }
+
         selectedFeatures.length = 0;
-        hideToolbar();
         olMap?.render?.();
         showSelToast(`🗑️ Đã xóa ${deleted}/${count} features`, deleted === count ? 'success' : 'error');
         console.log(`[Selection] 🗑️ Deleted ${deleted}/${count} features`);
+
+        // Thông báo cho autosave cập nhật
+        document.dispatchEvent(new CustomEvent('3dg:features-changed'));
     }
 
     function exportSelectedFeatures() {
@@ -374,31 +344,44 @@
 
     // ==================== BOX DRAWING ====================
 
-    // Tạm disable DragZoom interaction (OL built-in Shift+Drag = zoom)
+    // Tạm disable DragZoom + Draw interactions khi Shift held
     // để tránh xung đột với box selection
-    let _dragZoomCache = null;
+    let _disabledInteractions = null;
 
-    function disableDragZoom() {
-        if (_dragZoomCache) return; // đã disable rồi
+    function disableMapInteractions() {
+        if (_disabledInteractions) return; // đã disable rồi
         try {
             const interactions = olMap.getInteractions().getArray();
-            // DragZoom có method getGeometry + condition thường là shiftKeyOnly
-            _dragZoomCache = interactions.filter(i =>
-                i.constructor?.name === 'DragZoom' ||
-                (typeof i.getGeometry === 'function' && typeof i.getCondition === 'function' && !(typeof i.removeLastPoint === 'function'))
-            );
-            for (const dz of _dragZoomCache) dz.setActive(false);
-            if (_dragZoomCache.length) log('DragZoom disabled', _dragZoomCache.length);
-        } catch (e) { _dragZoomCache = []; }
+            _disabledInteractions = interactions.filter(i => {
+                const name = i.constructor?.name || '';
+                // Disable DragZoom
+                if (name === 'DragZoom') return true;
+                // Disable Draw interactions (có removeLastPoint)
+                if (typeof i.removeLastPoint === 'function') return true;
+                // Fallback DragZoom detection
+                if (typeof i.getGeometry === 'function' && typeof i.getCondition === 'function') {
+                    if (typeof i.getFeatures === 'function') return false; // Select
+                    if (name.includes('Modify') || name.includes('Snap') || name.includes('Translate')) return false;
+                    try {
+                        const cond = i.getCondition();
+                        if (cond && cond.name && !cond.name.includes('shift')) return false;
+                    } catch (e) {}
+                    return true;
+                }
+                return false;
+            });
+            for (const i of _disabledInteractions) i.setActive(false);
+            if (_disabledInteractions.length) log('Interactions disabled:', _disabledInteractions.length);
+        } catch (e) { _disabledInteractions = []; }
     }
 
-    function enableDragZoom() {
-        if (!_dragZoomCache?.length) { _dragZoomCache = null; return; }
-        for (const dz of _dragZoomCache) {
-            try { dz.setActive(true); } catch (e) {}
+    function enableMapInteractions() {
+        if (!_disabledInteractions?.length) { _disabledInteractions = null; return; }
+        for (const i of _disabledInteractions) {
+            try { i.setActive(true); } catch (e) {}
         }
-        log('DragZoom re-enabled');
-        _dragZoomCache = null;
+        log('Interactions re-enabled');
+        _disabledInteractions = null;
     }
 
     function setupBoxSelection() {
@@ -412,10 +395,20 @@
             if (e.key === 'Shift') {
                 shiftHeld = true;
                 viewport.classList.add('sel-mode');
-                disableDragZoom();
+                disableMapInteractions();
             }
+            // Esc → bỏ chọn
             if (e.key === 'Escape' && selectedFeatures.length > 0) {
                 clearSelection();
+            }
+            // Del → xóa tất cả features đang chọn
+            if (e.key === 'Delete' && selectedFeatures.length > 0) {
+                deleteSelectedFeatures();
+            }
+            // Ctrl+E → export features đang chọn
+            if (e.key === 'e' && e.ctrlKey && !e.shiftKey && !e.altKey && selectedFeatures.length > 0) {
+                e.preventDefault();
+                exportSelectedFeatures();
             }
         });
 
@@ -424,7 +417,7 @@
                 shiftHeld = false;
                 if (!isSelecting) {
                     viewport.classList.remove('sel-mode');
-                    enableDragZoom();
+                    enableMapInteractions();
                 }
             }
         });
@@ -474,7 +467,7 @@
 
             isSelecting = false;
             viewport.classList.remove('sel-mode');
-            enableDragZoom();
+            enableMapInteractions();
 
             if (!boxEl || !startPixel) return;
 
@@ -516,8 +509,8 @@
 
             if (found.length > 0) {
                 highlightFeatures(found);
-                showToolbar(found.length);
                 olMap.render();
+                showSelToast(`✅ Đã chọn ${found.length} feature${found.length > 1 ? 's' : ''} — Del: xóa | Ctrl+E: export | Esc: bỏ chọn`, 'info');
                 console.log(`[Selection] ✅ Selected ${found.length} features`);
             } else {
                 showSelToast('Không tìm thấy feature nào trong vùng chọn', 'info');
@@ -527,12 +520,13 @@
 
     // ==================== INIT ====================
     function initSelection() {
-        olMap = findOlMap();
+        // Ưu tiên dùng shared map từ inject.js
+        olMap = window.__olMap || findOlMap();
         if (!olMap) { setTimeout(initSelection, 3000); return; }
 
         console.log('[Selection] ✅ Map found. Initializing box selection...');
         injectSelectionStyles();
-        createToolbar();
+        createToastContainer();
         setupBoxSelection();
         console.log('[Selection] 🔲 Box selection ready! Shift+Drag to select.');
     }

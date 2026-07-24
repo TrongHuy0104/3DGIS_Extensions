@@ -29,15 +29,10 @@
     function log(...args) { if (DEBUG) console.log('[AutoSave]', ...args); }
 
     // ==================== TÌM MAP ====================
-    (function waitForMap() {
-        if (!document.querySelector('.ol-viewport')) {
-            setTimeout(waitForMap, 1000);
-            return;
-        }
-        setTimeout(init, 3000);
-    })();
-
+    // Dùng shared findOlMap từ inject.js, fallback nếu chưa sẵn sàng
     function findOlMap() {
+        if (window.__findOlMap) return window.__findOlMap();
+        // Fallback: nếu inject.js chưa load (không nên xảy ra với sequential loading)
         const viewport = document.querySelector('.ol-viewport');
         if (!viewport) return null;
         let el = viewport.parentElement;
@@ -63,6 +58,30 @@
             el = el.parentElement;
         }
         return null;
+    }
+
+    // Ưu tiên listen event từ inject.js, fallback poll nếu cần
+    if (window.__olMap) {
+        // inject.js đã init xong trước → init ngay
+        setTimeout(init, 500);
+    } else {
+        // Chờ event từ inject.js
+        document.addEventListener('3dg:map-ready', () => {
+            setTimeout(init, 500);
+        }, { once: true });
+        // Safety fallback: nếu event không đến trong 10s, tự poll
+        setTimeout(() => {
+            if (!olMap) {
+                log('⚠️ map-ready event not received, falling back to poll');
+                (function waitForMap() {
+                    if (!document.querySelector('.ol-viewport')) {
+                        setTimeout(waitForMap, 1000);
+                        return;
+                    }
+                    setTimeout(init, 3000);
+                })();
+            }
+        }, 10000);
     }
 
     // ==================== CHUYỂN ĐỔI TỌA ĐỘ ====================
@@ -452,6 +471,12 @@
                 save();
                 showToast('💾 Đã lưu!', 'success');
             }
+        });
+
+        // Listen thay đổi từ inject.js (undo/redo) và selection.js (delete)
+        document.addEventListener('3dg:features-changed', () => {
+            log('📡 features-changed event received');
+            scheduleSave();
         });
     }
 
@@ -918,7 +943,8 @@
 
     // ==================== KHỞI TẠO ====================
     function init() {
-        olMap = findOlMap();
+        // Ưu tiên dùng shared map từ inject.js
+        olMap = window.__olMap || findOlMap();
         if (!olMap) { setTimeout(init, 3000); return; }
 
         console.log('[AutoSave] ✅ OpenLayers Map found. Initializing auto-save...');

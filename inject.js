@@ -5,9 +5,10 @@
 })();
 
 function initCtrlZ() {
-    if (window.__ctrlZHandler) document.removeEventListener('keydown', window.__ctrlZHandler);
+    if (window.__ctrlZHandler) document.removeEventListener('keydown', window.__ctrlZHandler, true);
     if (window.__featureClickHandler) document.removeEventListener('click', window.__featureClickHandler, true);
 
+    // ===== SHARED findOlMap — single source of truth =====
     function findOlMap() {
         const viewport = document.querySelector('.ol-viewport');
         if (!viewport) return null;
@@ -36,10 +37,19 @@ function initCtrlZ() {
         return null;
     }
 
+    // Expose findOlMap cho autosave.js và selection.js dùng chung
+    window.__findOlMap = findOlMap;
+
     const olMap = findOlMap();
     if (!olMap) { setTimeout(initCtrlZ, 3000); return; }
 
+    // Expose olMap reference cho các module khác
+    window.__olMap = olMap;
+
     window.__redoStack = [];
+    // ===== UNDO STACK cho các hành động tổng quát (bulk delete, v.v.) =====
+    // Khác với __redoStack (dành cho Ctrl+Y), __undoStack dành cho Ctrl+Z
+    if (!window.__undoStack) window.__undoStack = [];
     // ===== FEATURE ORDER STACK (LIFO) =====
     // Track thứ tự feature được thêm vào map.
     // Feature vẽ mới nhất nằm cuối mảng → Ctrl+Z xóa nó trước.
@@ -137,6 +147,10 @@ function initCtrlZ() {
         return true;
     }
 
+    // Expose cho selection.js dùng khi xóa features
+    window.__deleteFeatureByDOM = deleteFeatureByDOM;
+    window.__findFeatureById = findFeatureById;
+
     // ===== Tìm input GeoJSON — thử nhiều selector =====
     function findGeoJSONInput() {
         return document.querySelector('input[accept*=".geojson"]')
@@ -177,6 +191,14 @@ function initCtrlZ() {
         input.files = dt.files;
         input.dispatchEvent(new Event('change', { bubbles: true }));
         return true;
+    }
+
+    // Expose cho selection.js có thể dùng nếu cần
+    window.__restoreFeatureByImport = restoreFeatureByImport;
+
+    // ===== Helper: thông báo cho autosave biết features đã thay đổi =====
+    function notifyFeaturesChanged() {
+        document.dispatchEvent(new CustomEvent('3dg:features-changed'));
     }
 
     // ===== UNDO =====
@@ -294,47 +316,85 @@ function initCtrlZ() {
         // Ctrl+Z: UNDO
         if (e.key === 'z' || e.key === 'Z') {
             e.preventDefault();
+            e.stopPropagation(); // Chặn site/OL xử lý trùng
 
-            // Đang vẽ → xóa điểm cuối của sketch
-            const activeDraw = olMap.getInteractions().getArray()
-                .find(i => typeof i.removeLastPoint === 'function' && i.sketchFeature_ != null);
-            if (activeDraw) { activeDraw.removeLastPoint(); olMap.render(); return; }
+            try {
 
-            // Undo trên feature đang chọn
-            if (window.__selectedFeatureId) {
-                const r = undoOneCoord(window.__selectedFeatureId);
-                if (r === 'deleted') window.__selectedFeatureId = null;
-                if (r !== 'skip') { olMap.render(); return; }
-                window.__selectedFeatureId = null;
-            }
+                // Đang vẽ → xóa điểm cuối của sketch
+                const activeDraw = olMap.getInteractions().getArray()
+                    .find(i => typeof i.removeLastPoint === 'function' && i.sketchFeature_ != null);
+                if (activeDraw) { activeDraw.removeLastPoint(); olMap.render(); return; }
 
-            // Undo theo thứ tự LIFO (feature vẽ sau → xóa trước)
-            if (window.__featureOrderStack.length > 0) {
-                for (let i = window.__featureOrderStack.length - 1; i >= 0; i--) {
-                    const fid = window.__featureOrderStack[i];
-                    const r = undoOneCoord(fid);
-                    if (r === 'removed' || r === 'deleted') {
-                        olMap.render(); return;
+                // Kiểm tra __undoStack (bulk delete từ selection, v.v.)
+                if (window.__undoStack && window.__undoStack.length > 0) {
+                    const undoEntry = window.__undoStack.pop();
+                    if (undoEntry.action === 'bulkDelete' && undoEntry.features) {
+                        let restored = 0;
+                        for (const feat of undoEntry.features) {
+                            if (restoreFeatureByImport(feat)) restored++;
+                        }
+                        console.log(`[CtrlZ] ↩️ Undo bulk delete: restored ${restored}/${undoEntry.features.length}`);
+                    }
+                    olMap.render();
+                    notifyFeaturesChanged();
+                    return;
+                }
+
+                // Undo trên feature đang chọn (nếu feature vẫn tồn tại)
+                if (window.__selectedFeatureId) {
+                    const { feature: selFeature } = findFeatureById(window.__selectedFeatureId);
+                    if (selFeature) {
+                        // Feature tồn tại → thử undo coord
+                        const r = undoOneCoord(window.__selectedFeatureId);
+                        if (r === 'deleted') window.__selectedFeatureId = null;
+                        if (r !== 'skip') { olMap.render(); notifyFeaturesChanged(); return; }
+                    }
+                    // Feature không tồn tại hoặc skip → xóa stale ID, tiếp tục xuống LIFO
+                    window.__selectedFeatureId = null;
+                }
+
+                // Undo theo thứ tự LIFO (feature vẽ sau → xóa trước)
+                if (window.__featureOrderStack.length > 0) {
+                    for (let i = window.__featureOrderStack.length - 1; i >= 0; i--) {
+                        const fid = window.__featureOrderStack[i];
+                        const r = undoOneCoord(fid);
+                        if (r === 'removed' || r === 'deleted') {
+                            olMap.render(); notifyFeaturesChanged(); return;
+                        }
+                    }
+                } else {
+                    // Fallback: duyệt DOM rows nếu stack rỗng
+                    const rows = document.querySelectorAll('div[data-feature-id]');
+                    for (let i = rows.length - 1; i >= 0; i--) {
+                        const r = undoOneCoord(rows[i].getAttribute('data-feature-id'));
+                        if (r === 'removed' || r === 'deleted') { olMap.render(); notifyFeaturesChanged(); return; }
                     }
                 }
-            } else {
-                // Fallback: duyệt DOM rows nếu stack rỗng
-                const rows = document.querySelectorAll('div[data-feature-id]');
-                for (let i = rows.length - 1; i >= 0; i--) {
-                    const r = undoOneCoord(rows[i].getAttribute('data-feature-id'));
-                    if (r === 'removed' || r === 'deleted') { olMap.render(); return; }
-                }
+                olMap.render();
+                notifyFeaturesChanged();
+            } catch (err) {
+                console.error('[CtrlZ] Lỗi khi undo:', err);
             }
-            olMap.render();
             return;
         }
 
         // Ctrl+Y: REDO
         if (e.key === 'y' || e.key === 'Y') {
             e.preventDefault();
-            redoOneStep();
-            olMap.render();
+            e.stopPropagation(); // Chặn site xử lý trùng
+            try {
+                redoOneStep();
+                olMap.render();
+                notifyFeaturesChanged();
+            } catch (err) {
+                console.error('[CtrlZ] Lỗi khi redo:', err);
+            }
         }
     };
-    document.addEventListener('keydown', window.__ctrlZHandler);
+    // Capture phase: đảm bảo handler chạy TRƯỚC site/OL handlers
+    document.addEventListener('keydown', window.__ctrlZHandler, true);
+
+    // Dispatch map-ready event cho autosave.js và selection.js
+    console.log('[CtrlZ] ✅ Map found & initialized. Dispatching 3dg:map-ready');
+    document.dispatchEvent(new CustomEvent('3dg:map-ready', { detail: { map: olMap } }));
 }
