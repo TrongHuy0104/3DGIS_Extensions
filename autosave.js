@@ -144,6 +144,7 @@
     }
 
     // Fix 2: djb2 hash — nhanh, collision thấp hơn nhiều so với hash cũ
+    // Kết hợp count + string length để giảm collision 32-bit
     function quickHash(geojson) {
         if (!geojson.features.length) return 'empty';
         const str = geojson.features.map(f =>
@@ -153,7 +154,7 @@
         for (let i = 0; i < str.length; i++) {
             hash = ((hash << 5) + hash + str.charCodeAt(i)) | 0;
         }
-        return hash.toString(36);
+        return geojson.features.length + '_' + str.length + '_' + (hash >>> 0).toString(36);
     }
 
     // ==================== LƯU / TẢI ====================
@@ -380,6 +381,7 @@
         // - Check DOM dirty flag từ MutationObserver
         // - Periodic save nếu phát hiện thay đổi
         let loopCount = 0;
+        let lastDOMCount = -1;
         setInterval(() => {
             loopCount++;
             try {
@@ -389,8 +391,10 @@
                     return; // Sau refresh, đợi loop tiếp để ổn định
                 }
 
-                // 2. Re-scan sources
-                scanAllLayers();
+                // 2. Re-scan sources (mỗi 3 loop = ~9s thay vì mỗi loop)
+                if (loopCount % 3 === 0) {
+                    scanAllLayers();
+                }
 
                 // 3. DOM dirty → schedule save (throttled bởi debounce)
                 if (_domDirty) {
@@ -398,10 +402,16 @@
                     scheduleSave();
                 }
 
-                // 4. Periodic change detection (mỗi 3 loop = ~9 giây)
-                if (loopCount % 3 === 0) {
-                    const geojson = extractFeatures();
+                // 4. Periodic change detection (mỗi 5 loop = ~15 giây)
+                if (loopCount % 5 === 0) {
+                    // Early exit: nếu DOM count không đổi → likely chưa thay đổi
                     const domCount = countDOMFeatures();
+                    if (domCount === lastDOMCount && domCount === lastSavedCount) {
+                        return; // Skip expensive extract + hash
+                    }
+                    lastDOMCount = domCount;
+
+                    const geojson = extractFeatures();
                     const hash = quickHash(geojson);
                     if (hash !== lastSavedHash && geojson.features.length > 0) {
                         console.log(`[AutoSave] 🔍 Periodic: OL=${geojson.features.length}, DOM=${domCount} → saving`);
@@ -434,14 +444,22 @@
                     }
                 }
             });
-            observer.observe(document.body, { childList: true, subtree: true });
-            log('👁️ MutationObserver attached');
+            // Thu hẹp scope: observe container chứa feature list thay vì toàn bộ body
+            const featureRow = document.querySelector('div[data-feature-id]');
+            const observeTarget = featureRow?.parentElement || document.body;
+            observer.observe(observeTarget, { childList: true, subtree: true });
+            log('👁️ MutationObserver attached to', observeTarget.tagName,
+                observeTarget === document.body ? '(fallback)' : '(scoped)');
         } catch (e) { }
 
-        // Lưu trước khi thoát
+        // Lưu trước khi thoát — chỉ save nếu extract được data,
+        // tránh ghi đè bản lưu cũ bằng data rỗng khi map stale
         window.addEventListener('beforeunload', () => {
             if (saveTimer) clearTimeout(saveTimer);
-            save();
+            const geojson = extractFeatures();
+            if (geojson.features.length > 0) {
+                save(geojson);
+            }
         });
 
         // Ctrl+S lưu ngay
@@ -911,9 +929,10 @@
 
         container.appendChild(toast);
 
-        setTimeout(() => {
-            toast.remove();
-        }, TOAST_MS + 400);
+        // Dùng animationend thay vì setTimeout để timing chính xác
+        toast.addEventListener('animationend', (e) => {
+            if (e.animationName === 'as-toast-out') toast.remove();
+        });
     }
 
     // ==================== KHỞI TẠO ====================
