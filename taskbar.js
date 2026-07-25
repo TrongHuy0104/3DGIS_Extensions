@@ -38,6 +38,15 @@
             title: 'Ti\u1EBFp t\u1EE5c (Ctrl + Y)',
             shortcut: 'Ctrl+Y',
             onClick: performRedo
+        },
+        {
+            id: 'split',
+            icon: '\u2702',
+            title: 'Chia \u0111\u01b0\u1eddng (Alt+S)',
+            shortcut: 'Alt+S',
+            toggle: true,
+            isActive: function () { return !!window.__splitToolActive; },
+            onClick: function () { if (window.__toggleSplitTool) window.__toggleSplitTool(); }
         }
     ];
 
@@ -120,6 +129,15 @@
     opacity: 0.30;
     cursor: not-allowed;
 }
+#__3dg-taskbar .tb-btn.--active {
+    background: #e6f4ff;
+    border-color: #1677ff;
+    color: #1677ff;
+    box-shadow: 0 0 0 2px rgba(22, 119, 255, 0.15);
+}
+#__3dg-taskbar .tb-btn.--active:hover {
+    background: #d6eaff;
+}
 
 /* ═══ Pin status badge ════════════════════════════ */
 #__3dg-taskbar .tb-pin-badge {
@@ -147,6 +165,10 @@
         btn.setAttribute('title', cfg.title);
         btn.setAttribute('type', 'button');
 
+        if (cfg.toggle && typeof cfg.isActive === 'function' && cfg.isActive()) {
+            btn.classList.add('--active');
+        }
+
         const iconSpan = document.createElement('span');
         iconSpan.textContent = cfg.icon;
         btn.appendChild(iconSpan);
@@ -156,6 +178,13 @@
             e.stopPropagation();
             if (!btn.disabled && typeof cfg.onClick === 'function') {
                 cfg.onClick();
+                // Update toggle state after click
+                if (cfg.toggle && typeof cfg.isActive === 'function') {
+                    // Small delay to let the tool update its state
+                    setTimeout(function () {
+                        btn.classList.toggle('--active', cfg.isActive());
+                    }, 50);
+                }
             }
         });
 
@@ -174,7 +203,7 @@
         // Pin status badge (shown only when pinned)
         const badge = document.createElement('span');
         badge.className = 'tb-pin-badge';
-        badge.textContent = '\uD83D\uDCCC Alt+T';
+        badge.textContent = '\uD83D\uDCCC Ctrl+Alt+T';
         bar.appendChild(badge);
 
         return bar;
@@ -276,7 +305,7 @@
 
         // ── Alt+T: toggle pin ─────────────────────────────
         document.addEventListener('keydown', function (e) {
-            if (e.altKey && !e.ctrlKey && !e.shiftKey && (e.key === 't' || e.key === 'T')) {
+            if (e.altKey && e.ctrlKey && !e.shiftKey && (e.key === 't' || e.key === 'T')) {
                 e.preventDefault();
                 e.stopPropagation();
 
@@ -291,7 +320,7 @@
             }
         }, true);
 
-        console.log('[Taskbar] \u2705 Ready (hover header + Ctrl+T to pin)');
+        console.log('[Taskbar] \u2705 Ready (hover header + Ctrl+Alt+T to pin)');
     }
 
     // ── Go! ───────────────────────────────────────────────────

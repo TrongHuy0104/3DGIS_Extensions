@@ -93,6 +93,9 @@
         log('Style observer attached');
     }
 
+    // ==================== STATE ====================
+    let isPinned = false;
+
     // ==================== MOUSE TRACKING ====================
     document.addEventListener('mousemove', (e) => {
         mouseX = e.clientX;
@@ -104,7 +107,7 @@
         if (!isVisible && mouseX <= TRIGGER_ZONE) {
             showPanel();
             log('→ Show (mouse at', mouseX, ')');
-        } else if (isVisible) {
+        } else if (isVisible && !isPinned) {
             const rect = panelWrapper.getBoundingClientRect();
             if (mouseX > rect.right + 50) {
                 hidePanel();
@@ -115,11 +118,31 @@
 
     document.addEventListener('mouseleave', () => {
         mouseX = 9999;
-        if (isVisible && panelWrapper) {
+        if (isVisible && panelWrapper && !isPinned) {
             hidePanel();
             log('→ Hide (mouse left window)');
         }
     });
+
+    // ==================== CTRL+B: TOGGLE PANEL ====================
+
+    document.addEventListener('keydown', (e) => {
+        if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && (e.key === 'b' || e.key === 'B')) {
+            e.preventDefault();
+            e.stopPropagation();
+
+            if (!panelWrapper || !document.body.contains(panelWrapper)) return;
+
+            isPinned = !isPinned;
+            if (isPinned) {
+                showPanel();
+                log('→ Show (Ctrl+B pinned)');
+            } else {
+                hidePanel();
+                log('→ Hide (Ctrl+B unpinned)');
+            }
+        }
+    }, true);
 
     // ==================== INIT ====================
     function trySetup() {
@@ -140,13 +163,14 @@
         panelWrapper = wrapper;
         wrapper.setAttribute('data-autohide', '1');
 
-        // Ẩn ngay lập tức
-        hidePanel();
+        // Mặc định: hiện panel + pin
+        isPinned = true;
+        showPanel();
 
         // Watch React style changes
         watchStyleChanges(wrapper);
 
-        console.log('[PanelHide] ✅ Panel auto-hide activated!');
+        console.log('[PanelHide] ✅ Panel auto-hide activated (visible by default)');
         return true;
     }
 
