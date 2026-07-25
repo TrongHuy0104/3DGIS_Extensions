@@ -29,15 +29,10 @@
     function log(...args) { if (DEBUG) console.log('[AutoSave]', ...args); }
 
     // ==================== TÌM MAP ====================
-    (function waitForMap() {
-        if (!document.querySelector('.ol-viewport')) {
-            setTimeout(waitForMap, 1000);
-            return;
-        }
-        setTimeout(init, 3000);
-    })();
-
+    // Dùng shared findOlMap từ inject.js, fallback nếu chưa sẵn sàng
     function findOlMap() {
+        if (window.__findOlMap) return window.__findOlMap();
+        // Fallback: nếu inject.js chưa load (không nên xảy ra với sequential loading)
         const viewport = document.querySelector('.ol-viewport');
         if (!viewport) return null;
         let el = viewport.parentElement;
@@ -65,6 +60,30 @@
         return null;
     }
 
+    // Ưu tiên listen event từ inject.js, fallback poll nếu cần
+    if (window.__olMap) {
+        // inject.js đã init xong trước → init ngay
+        setTimeout(init, 500);
+    } else {
+        // Chờ event từ inject.js
+        document.addEventListener('3dg:map-ready', () => {
+            setTimeout(init, 500);
+        }, { once: true });
+        // Safety fallback: nếu event không đến trong 10s, tự poll
+        setTimeout(() => {
+            if (!olMap) {
+                log('⚠️ map-ready event not received, falling back to poll');
+                (function waitForMap() {
+                    if (!document.querySelector('.ol-viewport')) {
+                        setTimeout(waitForMap, 1000);
+                        return;
+                    }
+                    setTimeout(init, 3000);
+                })();
+            }
+        }, 10000);
+    }
+
     // ==================== CHUYỂN ĐỔI TỌA ĐỘ ====================
     // Site dùng EPSG:3857, GeoJSON import cần EPSG:3857 luôn (site không transform)
     // Nên ta lưu trực tiếp tọa độ EPSG:3857 — không cần chuyển đổi
@@ -85,16 +104,23 @@
         return stale;
     }
 
-    function refreshMap() {
-        if (!isMapStale()) return false;
-        console.log('[AutoSave] 🔄 Map stale! Re-finding...');
+    function refreshMap(force = false) {
+        if (!force && !isMapStale()) return false;
+        console.log('[AutoSave] 🔄 Map re-finding...');
         const newMap = findOlMap();
-        if (!newMap || newMap === olMap) {
-            log('❌ Không tìm thấy map mới');
+        if (!newMap) {
+            log('❌ Không tìm thấy map');
             return false;
         }
+        if (newMap === olMap) {
+            if (!force) return false;
+            // Force mode: same map, reset cache để thử lại
+            _staleCache = { ts: Date.now(), result: false };
+            return true;
+        }
+        // Map mới
         olMap = newMap;
-        _staleCache = { ts: Date.now(), result: false }; // Invalidate cache
+        _staleCache = { ts: Date.now(), result: false };
         console.log('[AutoSave] ✅ Map mới found, re-attaching listeners');
         setupListeners();
         return true;
@@ -103,21 +129,28 @@
     function extractFeatures() {
         const features = [];
         const seenIds = new Set();
+        const seenFeatures = new WeakSet();
         // Safeguard: nếu map stale thì thử refresh trước
         if (isMapStale()) {
-            const found = refreshMap();
+            const found = refreshMap(true);
             if (!found) return { type: 'FeatureCollection', features };
         }
         function collect(layer) {
-            if (layer.getLayers) { layer.getLayers().forEach(collect); return; }
+            // typeof check thay vì truthy — tránh crash nếu getLayers không phải function
+            if (typeof layer.getLayers === 'function') {
+                try { layer.getLayers().forEach(collect); } catch (e) {}
+                return;
+            }
             try {
                 const src = layer.getSource?.();
                 if (!src?.getFeatures) return;
                 for (const f of src.getFeatures()) {
+                    if (seenFeatures.has(f)) continue; // Dedup by object ref
+                    seenFeatures.add(f);
                     const geom = f.getGeometry();
                     if (!geom) continue;
                     const fid = f.getId();
-                    if (fid && seenIds.has(fid)) continue; // Tránh trùng lặp
+                    if (fid && seenIds.has(fid)) continue;
                     if (fid) seenIds.add(fid);
                     const type = geom.getType();
                     const coordinates = geom.getCoordinates();
@@ -135,6 +168,29 @@
         } catch (e) {
             console.warn('[AutoSave] extractFeatures failed:', e);
         }
+
+        // FALLBACK: OL trả về 0 nhưng DOM có features → thử tìm lại
+        if (features.length === 0) {
+            const domIds = getDOMFeatureIds();
+            if (domIds.length > 0) {
+                console.warn(`[AutoSave] ⚠️ OL=0, DOM=${domIds.length} → fallback`);
+                // Force re-find map
+                const freshMap = findOlMap();
+                if (freshMap) {
+                    if (freshMap !== olMap) {
+                        olMap = freshMap;
+                        _staleCache = { ts: 0, result: true };
+                    }
+                    // Thử extract lại từ map (có thể mới)
+                    try { olMap.getLayers().forEach(collect); } catch (e) {}
+                }
+                // Vẫn 0? → tìm từng feature theo ID
+                if (features.length === 0) {
+                    extractByDOMIds(domIds, features, seenIds, seenFeatures);
+                }
+            }
+        }
+
         return { type: 'FeatureCollection', features };
     }
 
@@ -143,7 +199,61 @@
         return document.querySelectorAll('div[data-feature-id]').length;
     }
 
+    // Lấy danh sách feature IDs từ DOM
+    function getDOMFeatureIds() {
+        const ids = [];
+        document.querySelectorAll('div[data-feature-id]').forEach(el => {
+            const id = el.getAttribute('data-feature-id');
+            if (id) ids.push(id);
+        });
+        return ids;
+    }
+
+    // Tìm features theo ID — fallback khi layer traversal thất bại
+    function extractByDOMIds(domIds, features, seenIds, seenFeatures) {
+        let found = 0;
+        for (const fid of domIds) {
+            if (seenIds.has(fid)) continue;
+            try {
+                let feature = null;
+                function search(layer) {
+                    if (feature) return;
+                    if (typeof layer.getLayers === 'function') {
+                        try { layer.getLayers().forEach(search); } catch (e) {}
+                        return;
+                    }
+                    try {
+                        const src = layer.getSource?.();
+                        if (src?.getFeatureById) {
+                            const f = src.getFeatureById(fid);
+                            if (f) feature = f;
+                        }
+                    } catch (e) {}
+                }
+                try { olMap.getLayers().forEach(search); } catch (e) {}
+
+                if (feature && !seenFeatures.has(feature)) {
+                    seenFeatures.add(feature);
+                    const geom = feature.getGeometry();
+                    if (geom) {
+                        seenIds.add(fid);
+                        features.push({
+                            type: 'Feature', id: fid,
+                            geometry: { type: geom.getType(), coordinates: geom.getCoordinates() },
+                            properties: null
+                        });
+                        found++;
+                    }
+                }
+            } catch (e) {}
+        }
+        if (found > 0) {
+            console.log(`[AutoSave] ✅ Fallback: ${found}/${domIds.length} features by ID`);
+        }
+    }
+
     // Fix 2: djb2 hash — nhanh, collision thấp hơn nhiều so với hash cũ
+    // Kết hợp count + string length để giảm collision 32-bit
     function quickHash(geojson) {
         if (!geojson.features.length) return 'empty';
         const str = geojson.features.map(f =>
@@ -153,7 +263,7 @@
         for (let i = 0; i < str.length; i++) {
             hash = ((hash << 5) + hash + str.charCodeAt(i)) | 0;
         }
-        return hash.toString(36);
+        return geojson.features.length + '_' + str.length + '_' + (hash >>> 0).toString(36);
     }
 
     // ==================== LƯU / TẢI ====================
@@ -207,7 +317,7 @@
         saveTimer = setTimeout(save, DEBOUNCE_MS);
     }
 
-    function tryRestore() {
+    function tryRestore(retries = 0) {
         try {
             const raw = localStorage.getItem(STORAGE_KEY);
             if (!raw) {
@@ -223,12 +333,19 @@
                 return;
             }
 
-            // Nếu map đã có features → không restore (tránh trùng lặp)
+            // Nếu map đã có >= 50% features so với bản lưu → không cần restore
             const current = extractFeatures();
-            if (current.features.length > 0) {
+            if (current.features.length > 0 && current.features.length >= data.geojson.features.length * 0.5) {
                 hasInitialized = true;
                 lastSavedHash = quickHash(data.geojson);
                 updateIndicator('saved', data.count, data.ts);
+                return;
+            }
+
+            // Nếu OL trả 0 nhưng DOM có features → map đang load, retry
+            if (current.features.length === 0 && countDOMFeatures() > 0 && retries < 3) {
+                log(`🔄 tryRestore retry ${retries + 1}/3 — DOM has features, waiting...`);
+                setTimeout(() => tryRestore(retries + 1), 3000);
                 return;
             }
 
@@ -241,7 +358,11 @@
     }
 
     function doRestore(data) {
-        const input = document.querySelector('input[accept*=".geojson"]');
+        // Thử nhiều selector để tìm input GeoJSON
+        const input = document.querySelector('input[accept*=".geojson"]')
+            || document.querySelector('input[accept*="geojson"]')
+            || document.querySelector('input[accept*=".json"]')
+            || document.querySelector('input[type="file"][accept]');
         if (!input) {
             showToast('❌ Không tìm thấy chức năng import GeoJSON trên trang!', 'error');
             return false;
@@ -258,6 +379,18 @@
         lastSavedHash = quickHash(data.geojson);
         updateIndicator('saved', data.count, data.ts);
         showToast(`✅ Đã khôi phục ${data.geojson.features.length} feature!`, 'success');
+
+        // Verify: kiểm tra features đã được import sau 3s
+        setTimeout(() => {
+            const after = extractFeatures();
+            if (after.features.length > 0) {
+                lastSavedHash = quickHash(after);
+                lastSavedCount = after.features.length;
+                updateIndicator('saved', after.features.length, data.ts);
+                console.log(`[AutoSave] ✅ Restore verified: ${after.features.length} features`);
+            }
+        }, 3000);
+
         return true;
     }
 
@@ -380,6 +513,7 @@
         // - Check DOM dirty flag từ MutationObserver
         // - Periodic save nếu phát hiện thay đổi
         let loopCount = 0;
+        let lastDOMCount = -1;
         setInterval(() => {
             loopCount++;
             try {
@@ -389,8 +523,10 @@
                     return; // Sau refresh, đợi loop tiếp để ổn định
                 }
 
-                // 2. Re-scan sources
-                scanAllLayers();
+                // 2. Re-scan sources (mỗi 3 loop = ~9s thay vì mỗi loop)
+                if (loopCount % 3 === 0) {
+                    scanAllLayers();
+                }
 
                 // 3. DOM dirty → schedule save (throttled bởi debounce)
                 if (_domDirty) {
@@ -400,15 +536,21 @@
 
                 // 4. Periodic change detection (mỗi 3 loop = ~9 giây)
                 if (loopCount % 3 === 0) {
-                    const geojson = extractFeatures();
+                    // Early exit: nếu DOM count không đổi → likely chưa thay đổi
                     const domCount = countDOMFeatures();
+                    if (domCount === lastDOMCount && domCount === lastSavedCount) {
+                        return; // Skip expensive extract + hash
+                    }
+                    lastDOMCount = domCount;
+
+                    const geojson = extractFeatures();
                     const hash = quickHash(geojson);
                     if (hash !== lastSavedHash && geojson.features.length > 0) {
                         console.log(`[AutoSave] 🔍 Periodic: OL=${geojson.features.length}, DOM=${domCount} → saving`);
-                        save(geojson); // Truyền thẳng, không extract lại
+                        save(geojson);
                     } else if (geojson.features.length === 0 && domCount > 0) {
-                        console.log(`[AutoSave] ⚠️ OL=0, DOM=${domCount} → re-find map`);
-                        if (refreshMap()) {
+                        console.log(`[AutoSave] ⚠️ OL=0, DOM=${domCount} → force re-find map`);
+                        if (refreshMap(true)) {
                             const g = extractFeatures();
                             if (g.features.length > 0) save(g);
                         }
@@ -434,14 +576,22 @@
                     }
                 }
             });
-            observer.observe(document.body, { childList: true, subtree: true });
-            log('👁️ MutationObserver attached');
+            // Thu hẹp scope: observe container chứa feature list thay vì toàn bộ body
+            const featureRow = document.querySelector('div[data-feature-id]');
+            const observeTarget = featureRow?.parentElement || document.body;
+            observer.observe(observeTarget, { childList: true, subtree: true });
+            log('👁️ MutationObserver attached to', observeTarget.tagName,
+                observeTarget === document.body ? '(fallback)' : '(scoped)');
         } catch (e) { }
 
-        // Lưu trước khi thoát
+        // Lưu trước khi thoát — chỉ save nếu extract được data,
+        // tránh ghi đè bản lưu cũ bằng data rỗng khi map stale
         window.addEventListener('beforeunload', () => {
             if (saveTimer) clearTimeout(saveTimer);
-            save();
+            const geojson = extractFeatures();
+            if (geojson.features.length > 0) {
+                save(geojson);
+            }
         });
 
         // Ctrl+S lưu ngay
@@ -452,6 +602,12 @@
                 save();
                 showToast('💾 Đã lưu!', 'success');
             }
+        });
+
+        // Listen thay đổi từ inject.js (undo/redo) và selection.js (delete)
+        document.addEventListener('3dg:features-changed', () => {
+            log('📡 features-changed event received');
+            scheduleSave();
         });
     }
 
@@ -712,10 +868,12 @@
                 font-family: 'Segoe UI', system-ui, sans-serif;
                 font-size: 13px;
                 box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
-                animation: as-toast-in 0.3s cubic-bezier(0.4, 0, 0.2, 1),
-                           as-toast-out 0.3s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+                animation: as-toast-in 0.3s cubic-bezier(0.4, 0, 0.2, 1) forwards;
                 white-space: nowrap;
                 pointer-events: auto;
+            }
+            .as-toast.out {
+                animation: as-toast-out 0.3s cubic-bezier(0.4, 0, 0.2, 1) forwards;
             }
             .as-toast.success { border-left: 3px solid #10b981; }
             .as-toast.error   { border-left: 3px solid #ef4444; }
@@ -904,21 +1062,21 @@
         const toast = document.createElement('div');
         toast.className = `as-toast ${type}`;
         toast.textContent = msg;
-
-        // Set animation timing
-        toast.style.animationDuration = '0.3s, 0.3s';
-        toast.style.animationDelay = `0s, ${TOAST_MS / 1000}s`;
-
         container.appendChild(toast);
 
+        // Sau TOAST_MS, trigger out animation bằng class toggle
         setTimeout(() => {
-            toast.remove();
-        }, TOAST_MS + 400);
+            toast.classList.add('out');
+            toast.addEventListener('animationend', () => toast.remove(), { once: true });
+            // Safety: remove sau 500ms nếu animationend không fire (tab inactive, etc.)
+            setTimeout(() => { if (toast.parentNode) toast.remove(); }, 500);
+        }, TOAST_MS);
     }
 
     // ==================== KHỞI TẠO ====================
     function init() {
-        olMap = findOlMap();
+        // Ưu tiên dùng shared map từ inject.js
+        olMap = window.__olMap || findOlMap();
         if (!olMap) { setTimeout(init, 3000); return; }
 
         console.log('[AutoSave] ✅ OpenLayers Map found. Initializing auto-save...');
