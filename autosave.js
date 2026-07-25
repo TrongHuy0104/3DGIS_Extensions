@@ -25,6 +25,7 @@
     let lastSavedCount = 0;
     let _staleCache = { ts: 0, result: true }; // Cache isMapStale
     let _domDirty = false; // MutationObserver sets this flag
+    const _pointIds = new Set(); // Track Point feature IDs (để loại khỏi DOM count)
 
     function log(...args) { if (DEBUG) console.log('[AutoSave]', ...args); }
 
@@ -135,6 +136,12 @@
             const found = refreshMap(true);
             if (!found) return { type: 'FeatureCollection', features };
         }
+
+        // Lọc: chỉ lưu features có trong bảng Biên tập (DOM sidebar)
+        // Loại bỏ control points, reference markers (p4, p6...) không do user vẽ
+        const domIds = getDOMFeatureIds();
+        const domIdSet = domIds.length > 0 ? new Set(domIds) : null;
+
         function collect(layer) {
             // typeof check thay vì truthy — tránh crash nếu getLayers không phải function
             if (typeof layer.getLayers === 'function') {
@@ -150,9 +157,17 @@
                     const geom = f.getGeometry();
                     if (!geom) continue;
                     const fid = f.getId();
+                    // Lọc: nếu có DOM sidebar, chỉ lấy features có trong sidebar
+                    if (domIdSet && fid && !domIdSet.has(fid)) continue;
+                    if (domIdSet && !fid) continue; // Skip features không có ID khi đang lọc
                     if (fid && seenIds.has(fid)) continue;
                     if (fid) seenIds.add(fid);
                     const type = geom.getType();
+                    // Skip Point/MultiPoint — control points, GCP markers (p4, gcpcanhvinhbsca24...)
+                    if (type === 'Point' || type === 'MultiPoint') {
+                        if (fid) _pointIds.add(fid); // Track để loại khỏi DOM count
+                        continue;
+                    }
                     const coordinates = geom.getCoordinates();
                     features.push({
                         type: 'Feature',
@@ -170,41 +185,44 @@
         }
 
         // FALLBACK: OL trả về 0 nhưng DOM có features → thử tìm lại
-        if (features.length === 0) {
-            const domIds = getDOMFeatureIds();
-            if (domIds.length > 0) {
-                console.warn(`[AutoSave] ⚠️ OL=0, DOM=${domIds.length} → fallback`);
-                // Force re-find map
-                const freshMap = findOlMap();
-                if (freshMap) {
-                    if (freshMap !== olMap) {
-                        olMap = freshMap;
-                        _staleCache = { ts: 0, result: true };
-                    }
-                    // Thử extract lại từ map (có thể mới)
-                    try { olMap.getLayers().forEach(collect); } catch (e) {}
+        if (features.length === 0 && domIds.length > 0) {
+            console.warn(`[AutoSave] ⚠️ OL=0, DOM=${domIds.length} → fallback`);
+            // Force re-find map
+            const freshMap = findOlMap();
+            if (freshMap) {
+                if (freshMap !== olMap) {
+                    olMap = freshMap;
+                    _staleCache = { ts: 0, result: true };
                 }
-                // Vẫn 0? → tìm từng feature theo ID
-                if (features.length === 0) {
-                    extractByDOMIds(domIds, features, seenIds, seenFeatures);
-                }
+                // Thử extract lại từ map (có thể mới)
+                try { olMap.getLayers().forEach(collect); } catch (e) {}
+            }
+            // Vẫn 0? → tìm từng feature theo ID
+            if (features.length === 0) {
+                extractByDOMIds(domIds, features, seenIds, seenFeatures);
             }
         }
 
         return { type: 'FeatureCollection', features };
     }
 
-    // Đếm số feature qua DOM để cross-check
+    // Đếm số feature qua DOM để cross-check (loại Point/GCP)
     function countDOMFeatures() {
-        return document.querySelectorAll('div[data-feature-id]').length;
+        let count = 0;
+        document.querySelectorAll('div[data-feature-id]').forEach(el => {
+            const id = el.getAttribute('data-feature-id');
+            if (id && _pointIds.has(id)) return; // Skip known Points
+            count++;
+        });
+        return count;
     }
 
-    // Lấy danh sách feature IDs từ DOM
+    // Lấy danh sách feature IDs từ DOM (loại Point/GCP)
     function getDOMFeatureIds() {
         const ids = [];
         document.querySelectorAll('div[data-feature-id]').forEach(el => {
             const id = el.getAttribute('data-feature-id');
-            if (id) ids.push(id);
+            if (id && !_pointIds.has(id)) ids.push(id);
         });
         return ids;
     }
@@ -236,10 +254,16 @@
                     seenFeatures.add(feature);
                     const geom = feature.getGeometry();
                     if (geom) {
+                        const gType = geom.getType();
+                        // Skip Point/MultiPoint — control points, GCP markers
+                        if (gType === 'Point' || gType === 'MultiPoint') {
+                            if (fid) _pointIds.add(fid);
+                            continue;
+                        }
                         seenIds.add(fid);
                         features.push({
                             type: 'Feature', id: fid,
-                            geometry: { type: geom.getType(), coordinates: geom.getCoordinates() },
+                            geometry: { type: gType, coordinates: geom.getCoordinates() },
                             properties: null
                         });
                         found++;
@@ -252,51 +276,94 @@
         }
     }
 
-    // Fix 2: djb2 hash — nhanh, collision thấp hơn nhiều so với hash cũ
-    // Kết hợp count + string length để giảm collision 32-bit
+    // djb2 hash — incremental, không tạo string khổng lồ
+    // Hash trực tiếp từ feature data → O(1) peak memory
     function quickHash(geojson) {
-        if (!geojson.features.length) return 'empty';
-        const str = geojson.features.map(f =>
-            f.id + ':' + f.geometry.type + ':' + JSON.stringify(f.geometry.coordinates)
-        ).join('|');
+        const n = geojson.features.length;
+        if (!n) return 'empty';
         let hash = 5381;
-        for (let i = 0; i < str.length; i++) {
-            hash = ((hash << 5) + hash + str.charCodeAt(i)) | 0;
+        let totalChars = 0;
+        for (let i = 0; i < n; i++) {
+            const f = geojson.features[i];
+            // Hash ID
+            const id = String(f.id || '');
+            for (let j = 0; j < id.length; j++) {
+                hash = ((hash << 5) + hash + id.charCodeAt(j)) | 0;
+            }
+            // Hash geometry type
+            const t = f.geometry.type;
+            for (let j = 0; j < t.length; j++) {
+                hash = ((hash << 5) + hash + t.charCodeAt(j)) | 0;
+            }
+            // Hash coordinates — stringify từng feature (không gộp thành 1 string)
+            const cs = JSON.stringify(f.geometry.coordinates);
+            totalChars += cs.length;
+            for (let j = 0; j < cs.length; j++) {
+                hash = ((hash << 5) + hash + cs.charCodeAt(j)) | 0;
+            }
         }
-        return geojson.features.length + '_' + str.length + '_' + (hash >>> 0).toString(36);
+        return n + '_' + totalChars + '_' + (hash >>> 0).toString(36);
+    }
+
+    // Truncate coordinate precision để giảm localStorage size
+    // EPSG:3405/VN-2000: đơn vị mét → 2 decimal = cm accuracy
+    // EPSG:4326: 6 decimal = ~11cm accuracy
+    function truncateCoords(coords) {
+        if (typeof coords[0] === 'number') {
+            // [x, y] or [x, y, z]
+            return coords.map(v => Math.round(v * 100) / 100);
+        }
+        return coords.map(truncateCoords);
     }
 
     // ==================== LƯU / TẢI ====================
     // save() nhận geojson tùy chọn để tránh extract 2 lần
-    function save(preExtracted) {
+    // force=true: Ctrl+S — bypass hash check, luôn ghi localStorage
+    function save(preExtracted, force = false) {
         try {
             const geojson = preExtracted || extractFeatures();
-            const domCount = countDOMFeatures();
 
-            if (geojson.features.length === 0 && !hasInitialized) {
-                log('⏭️ Skip: chưa init + 0 features');
-                return;
-            }
-
-            if (geojson.features.length === 0 && (lastSavedCount > 0 || domCount > 0)) {
-                log(`⚠️ OL=0, DOM=${domCount}, saved=${lastSavedCount} → skip`);
-                return;
-            }
-
-            if (geojson.features.length === 0) {
-                log('⏭️ Skip: 0 features');
-                return;
+            if (!force) {
+                const domCount = countDOMFeatures();
+                if (geojson.features.length === 0 && !hasInitialized) {
+                    log('⏭️ Skip: chưa init + 0 features');
+                    return false;
+                }
+                if (geojson.features.length === 0 && (lastSavedCount > 0 || domCount > 0)) {
+                    log(`⚠️ OL=0, DOM=${domCount}, saved=${lastSavedCount} → skip`);
+                    return false;
+                }
+                if (geojson.features.length === 0) {
+                    log('⏭️ Skip: 0 features');
+                    return false;
+                }
+            } else if (geojson.features.length === 0) {
+                // Force mode nhưng 0 features → vẫn skip
+                log('⏭️ Force save: 0 features → skip');
+                return false;
             }
 
             const hash = quickHash(geojson);
-            if (hash === lastSavedHash) return;
+            if (!force && hash === lastSavedHash) return false;
+
+            // Truncate coordinates để giảm storage size
+            const compactFeatures = geojson.features.map(f => ({
+                type: 'Feature',
+                id: f.id,
+                geometry: {
+                    type: f.geometry.type,
+                    coordinates: truncateCoords(f.geometry.coordinates)
+                },
+                properties: null
+            }));
+            const compactGeoJSON = { type: 'FeatureCollection', features: compactFeatures };
 
             const data = {
                 v: 1,
                 ts: Date.now(),
                 url: location.href,
-                count: geojson.features.length,
-                geojson
+                count: compactGeoJSON.features.length,
+                geojson: compactGeoJSON
             };
 
             localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
@@ -305,9 +372,11 @@
             hasInitialized = true;
             updateIndicator('saved', data.count, data.ts);
             console.log(`[AutoSave] 💾 Đã lưu ${data.count} features`);
+            return true;
         } catch (e) {
             console.error('[AutoSave] Lỗi khi lưu:', e);
             updateIndicator('error');
+            return false;
         }
     }
 
@@ -357,41 +426,70 @@
         }
     }
 
-    function doRestore(data) {
-        // Thử nhiều selector để tìm input GeoJSON
-        const input = document.querySelector('input[accept*=".geojson"]')
+    // Tìm input GeoJSON — thử nhiều selector
+    function findGeoJSONInput() {
+        return document.querySelector('input[accept*=".geojson"]')
             || document.querySelector('input[accept*="geojson"]')
             || document.querySelector('input[accept*=".json"]')
+            || document.querySelector('input[accept*="geo+json"]')
             || document.querySelector('input[type="file"][accept]');
-        if (!input) {
-            showToast('❌ Không tìm thấy chức năng import GeoJSON trên trang!', 'error');
-            return false;
+    }
+
+    function doRestore(data) {
+        // Thực hiện import GeoJSON
+        function executeImport() {
+            const input = findGeoJSONInput();
+            if (!input) return false;
+
+            const blob = new Blob([JSON.stringify(data.geojson)], { type: 'application/geo+json' });
+            const file = new File([blob], 'autosave_restore.geojson', { type: 'application/geo+json' });
+            const dt = new DataTransfer();
+            dt.items.add(file);
+            input.files = dt.files;
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+
+            hasInitialized = true;
+            lastSavedHash = quickHash(data.geojson);
+            updateIndicator('saved', data.count, data.ts);
+            showToast(`✅ Đã khôi phục ${data.geojson.features.length} feature!`, 'success');
+
+            // Verify: kiểm tra features đã được import sau 3s
+            setTimeout(() => {
+                const after = extractFeatures();
+                if (after.features.length > 0) {
+                    lastSavedHash = quickHash(after);
+                    lastSavedCount = after.features.length;
+                    updateIndicator('saved', after.features.length, data.ts);
+                    console.log(`[AutoSave] ✅ Restore verified: ${after.features.length} features`);
+                }
+            }, 3000);
+
+            return true;
         }
 
-        const blob = new Blob([JSON.stringify(data.geojson)], { type: 'application/geo+json' });
-        const file = new File([blob], 'autosave_restore.geojson', { type: 'application/geo+json' });
-        const dt = new DataTransfer();
-        dt.items.add(file);
-        input.files = dt.files;
-        input.dispatchEvent(new Event('change', { bubbles: true }));
+        // Thử restore ngay
+        if (executeImport()) return true;
 
-        hasInitialized = true;
-        lastSavedHash = quickHash(data.geojson);
-        updateIndicator('saved', data.count, data.ts);
-        showToast(`✅ Đã khôi phục ${data.geojson.features.length} feature!`, 'success');
+        // Input chưa có (bảng Biên tập chưa mở) → hướng dẫn + auto-retry
+        showToast('⚠️ Vui lòng mở bảng Biên tập dữ liệu để khôi phục!', 'warning');
+        console.log('[AutoSave] ⏳ Waiting for editor panel to open...');
 
-        // Verify: kiểm tra features đã được import sau 3s
-        setTimeout(() => {
-            const after = extractFeatures();
-            if (after.features.length > 0) {
-                lastSavedHash = quickHash(after);
-                lastSavedCount = after.features.length;
-                updateIndicator('saved', after.features.length, data.ts);
-                console.log(`[AutoSave] ✅ Restore verified: ${after.features.length} features`);
+        // Poll mỗi 2s, tối đa 60s chờ user mở bảng biên tập
+        let attempts = 0;
+        const retryTimer = setInterval(() => {
+            attempts++;
+            if (attempts > 30) {
+                clearInterval(retryTimer);
+                showToast('⏰ Hết thời gian chờ. Bấm Khôi phục lại sau khi mở bảng Biên tập.', 'info');
+                return;
             }
-        }, 3000);
+            if (executeImport()) {
+                clearInterval(retryTimer);
+                console.log(`[AutoSave] ✅ Auto-restored after ${attempts * 2}s wait`);
+            }
+        }, 2000);
 
-        return true;
+        return false;
     }
 
     function exportGeoJSON() {
@@ -594,13 +692,17 @@
             }
         });
 
-        // Ctrl+S lưu ngay
+        // Ctrl+S lưu ngay (force — bypass hash check)
         document.addEventListener('keydown', (e) => {
             if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
                 e.preventDefault();
                 if (saveTimer) clearTimeout(saveTimer);
-                save();
-                showToast('💾 Đã lưu!', 'success');
+                const ok = save(null, true);
+                if (ok) {
+                    showToast('💾 Đã lưu!', 'success');
+                } else {
+                    showToast('⚠️ Không có dữ liệu để lưu', 'info');
+                }
             }
         });
 
@@ -1046,8 +1148,23 @@
         }
 
         document.getElementById('as-restore-btn').addEventListener('click', () => {
-            doRestore(data);
-            dismiss();
+            const success = doRestore(data);
+            if (success) {
+                dismiss();
+            }
+            // Nếu chưa thành công (chờ mở panel), banner giữ nguyên
+            // doRestore sẽ auto-retry, dismiss khi thành công
+            if (!success) {
+                // Đăng ký callback: khi auto-retry thành công → dismiss banner
+                const checkInterval = setInterval(() => {
+                    if (hasInitialized) {
+                        clearInterval(checkInterval);
+                        dismiss();
+                    }
+                }, 2000);
+                // Timeout 65s
+                setTimeout(() => clearInterval(checkInterval), 65000);
+            }
         });
 
         document.getElementById('as-dismiss-btn').addEventListener('click', () => {
