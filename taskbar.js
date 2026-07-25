@@ -284,14 +284,20 @@
         }
 
         // ── Hover: header → reveal, leave → hide ─────────────
-        header.addEventListener('mouseenter', function () {
-            window.__taskbarHovered = true;
-            reveal();
-        });
-        header.addEventListener('mouseleave', function () {
-            window.__taskbarHovered = false;
-            scheduleHide();
-        });
+        let currentHeader = header;
+
+        function attachHeaderListeners(h) {
+            h.addEventListener('mouseenter', function () {
+                window.__taskbarHovered = true;
+                reveal();
+            });
+            h.addEventListener('mouseleave', function () {
+                window.__taskbarHovered = false;
+                scheduleHide();
+            });
+        }
+
+        attachHeaderListeners(header);
 
         // Taskbar hover: keep open + suppress panel-autohide
         bar.addEventListener('mouseenter', function () {
@@ -302,6 +308,34 @@
             window.__taskbarHovered = false;
             scheduleHide();
         });
+
+        // Fallback: document mousemove → detect hover ở header area
+        // Bắt trường hợp header bị React swap hoặc event listener mất
+        document.addEventListener('mousemove', function (e) {
+            if (!currentHeader || !document.body.contains(currentHeader)) return;
+            var rect = currentHeader.getBoundingClientRect();
+            var isOverHeader = (
+                e.clientY >= rect.top &&
+                e.clientY <= rect.bottom &&
+                e.clientX >= rect.left &&
+                e.clientX <= rect.right
+            );
+            if (isOverHeader && !bar.classList.contains('--visible')) {
+                window.__taskbarHovered = true;
+                reveal();
+            }
+        }, { passive: true });
+
+        // Periodic: re-detect header nếu React swap DOM
+        setInterval(function () {
+            var newHeader = document.querySelector('header');
+            if (newHeader && newHeader !== currentHeader) {
+                console.log('[Taskbar] 🔄 Header changed, re-attaching');
+                currentHeader = newHeader;
+                attachHeaderListeners(newHeader);
+                positionTaskbar(newHeader, bar);
+            }
+        }, 3000);
 
         // ── Alt+T: toggle pin ─────────────────────────────
         document.addEventListener('keydown', function (e) {

@@ -874,10 +874,10 @@
             /* ===== RESTORE BANNER ===== */
             #as-restore-banner {
                 position: fixed;
-                top: 0;
+                top: 48px; /* Dưới header — không che taskbar hover */
                 left: 0;
                 right: 0;
-                z-index: 99999;
+                z-index: 9980; /* Dưới taskbar (9990) */
                 background: linear-gradient(135deg, rgba(15, 23, 42, 0.95), rgba(30, 41, 59, 0.95));
                 backdrop-filter: blur(20px);
                 -webkit-backdrop-filter: blur(20px);
