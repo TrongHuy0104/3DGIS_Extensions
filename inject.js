@@ -70,6 +70,14 @@ function initCtrlZ() {
                 const idx = window.__featureOrderStack.indexOf(fid);
                 if (idx !== -1) window.__featureOrderStack.splice(idx, 1);
                 window.__featureOrderStack.push(fid);
+
+                // ===== LAND TYPE: gắn loại đất vào feature mới =====
+                const feature = e.feature;
+                if (window.__currentLandType && !feature.get('__landType')) {
+                    feature.set('__landType', window.__currentLandType);
+                }
+                // Áp dụng visual style nếu feature có landType
+                applyLandTypeStyle(feature);
             });
 
             src.on('removefeature', (e) => {
@@ -160,6 +168,75 @@ function initCtrlZ() {
             || document.querySelector('input[type="file"][accept]');
     }
 
+    // ===== LAND TYPE: Áp dụng visual style theo loại đất =====
+    function applyLandTypeStyle(feature) {
+        if (!feature) return;
+        const code = feature.get('__landType');
+        if (!code || !window.__getLandType) return;
+        const info = window.__getLandType(code);
+        if (!info) return;
+
+        try {
+            const rgb = info.rgb;
+            const colorStr = 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',1)';
+            const fillStr = 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',0.25)';
+
+            // Tìm OL Style classes từ feature hiện tại hoặc map layers
+            const existingStyle = feature.getStyle?.();
+            if (existingStyle && typeof existingStyle.clone === 'function') {
+                const cloned = existingStyle.clone();
+                const stroke = cloned.getStroke?.();
+                if (stroke) stroke.setColor(colorStr);
+                const fill = cloned.getFill?.();
+                if (fill) fill.setColor(fillStr);
+                feature.setStyle(cloned);
+                return;
+            }
+
+            // Fallback: tạo style function mới
+            feature.setStyle(function (f, resolution) {
+                // Lấy layer style làm base
+                let baseStyles = null;
+                try {
+                    olMap.getLayers().forEach(function scanLayer(layer) {
+                        if (baseStyles) return;
+                        if (layer.getLayers) { layer.getLayers().forEach(scanLayer); return; }
+                        try {
+                            const src = layer.getSource?.();
+                            if (src?.getFeatureById?.(f.getId())) {
+                                const ls = layer.getStyle?.();
+                                if (typeof ls === 'function') {
+                                    const r = ls(f, resolution);
+                                    baseStyles = Array.isArray(r) ? r : (r ? [r] : null);
+                                } else if (ls) {
+                                    baseStyles = Array.isArray(ls) ? ls : [ls];
+                                }
+                            }
+                        } catch (e) {}
+                    });
+                } catch (e) {}
+
+                if (baseStyles && baseStyles.length > 0) {
+                    return baseStyles.map(function (s) {
+                        try {
+                            const c = s.clone();
+                            const st = c.getStroke?.();
+                            if (st) st.setColor(colorStr);
+                            const fi = c.getFill?.();
+                            if (fi) fi.setColor(fillStr);
+                            return c;
+                        } catch (e) { return s; }
+                    });
+                }
+                return null; // fallback to OL default
+            });
+        } catch (e) {
+            console.warn('[CtrlZ] Failed to apply land type style:', e);
+        }
+    }
+    // Expose cho land-type-ui.js và các module khác
+    window.__applyLandTypeStyle = applyLandTypeStyle;
+
     // ===== REDO: Khôi phục feature bằng cách giả lập import GeoJSON =====
     function restoreFeatureByImport(entry) {
         let geometry;
@@ -171,12 +248,15 @@ function initCtrlZ() {
             geometry = { type: 'Point', coordinates: entry.coords[0] };
         }
 
+        // Preserve landType trong properties nếu có
+        const props = entry.landType ? { __landType: entry.landType } : null;
+
         const geojson = {
             type: 'FeatureCollection',
             features: [{
                 type: 'Feature',
                 geometry: geometry,
-                properties: null,
+                properties: props,
                 id: entry.featureId
             }]
         };
@@ -190,6 +270,17 @@ function initCtrlZ() {
         dt.items.add(file);
         input.files = dt.files;
         input.dispatchEvent(new Event('change', { bubbles: true }));
+
+        // Sau khi restore, cần apply style lại (chờ feature được thêm)
+        if (entry.landType) {
+            setTimeout(() => {
+                const { feature } = findFeatureById(entry.featureId);
+                if (feature) {
+                    feature.set('__landType', entry.landType);
+                    applyLandTypeStyle(feature);
+                }
+            }, 500);
+        }
         return true;
     }
 
@@ -217,7 +308,8 @@ function initCtrlZ() {
                     action: 'deleteFeature',
                     featureId: feature.getId(),
                     coords: [...coords, removedCoord],
-                    geomType: 'LineString'
+                    geomType: 'LineString',
+                    landType: feature.get('__landType') || null
                 });
                 deleteFeatureByDOM(featureId);
                 return 'deleted';
@@ -241,7 +333,8 @@ function initCtrlZ() {
                     action: 'deleteFeature',
                     featureId: feature.getId(),
                     coords: [...ring.slice(0, -1), removedCoord],
-                    geomType: 'Polygon'
+                    geomType: 'Polygon',
+                    landType: feature.get('__landType') || null
                 });
                 deleteFeatureByDOM(featureId);
                 return 'deleted';
@@ -261,7 +354,8 @@ function initCtrlZ() {
                 action: 'deleteFeature',
                 featureId: feature.getId(),
                 coords: [coord],
-                geomType: 'Point'
+                geomType: 'Point',
+                landType: feature.get('__landType') || null
             });
             deleteFeatureByDOM(featureId);
             return 'deleted';

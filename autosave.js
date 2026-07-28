@@ -169,11 +169,14 @@
                         continue;
                     }
                     const coordinates = geom.getCoordinates();
+                    // Lưu __landType nếu có
+                    const landType = f.get('__landType');
+                    const props = landType ? { __landType: landType } : null;
                     features.push({
                         type: 'Feature',
                         id: fid,
                         geometry: { type, coordinates },
-                        properties: null
+                        properties: props
                     });
                 }
             } catch (e) { }
@@ -461,6 +464,23 @@
                     lastSavedCount = after.features.length;
                     updateIndicator('saved', after.features.length, data.ts);
                     console.log(`[AutoSave] ✅ Restore verified: ${after.features.length} features`);
+                }
+                // Apply landType styles sau khi restore
+                if (window.__applyLandTypeStyle && olMap) {
+                    try {
+                        olMap.getLayers().forEach(function scanLayer(layer) {
+                            if (layer.getLayers) { layer.getLayers().forEach(scanLayer); return; }
+                            try {
+                                const src = layer.getSource?.();
+                                if (!src?.getFeatures) return;
+                                for (const f of src.getFeatures()) {
+                                    if (f.get('__landType')) {
+                                        window.__applyLandTypeStyle(f);
+                                    }
+                                }
+                            } catch (e) {}
+                        });
+                    } catch (e) {}
                 }
             }, 3000);
 

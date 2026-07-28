@@ -270,7 +270,8 @@
                             action: 'deleteFeature',
                             featureId: fid,
                             coords: savedCoords,
-                            geomType: type
+                            geomType: type,
+                            landType: entry.feature.get('__landType') || null
                         });
                     } catch (e) { log('Failed to save feature info:', e); }
                 }
@@ -319,11 +320,13 @@
             type: 'FeatureCollection',
             features: selectedFeatures.map(({ feature }) => {
                 const geom = feature.getGeometry();
+                const landType = feature.get('__landType');
+                const props = landType ? { __landType: landType } : null;
                 return {
                     type: 'Feature',
                     id: feature.getId?.(),
                     geometry: { type: geom.getType(), coordinates: geom.getCoordinates() },
-                    properties: null
+                    properties: props
                 };
             })
         };

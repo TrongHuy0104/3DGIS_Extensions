@@ -13,7 +13,7 @@
   ],
   "web_accessible_resources": [
     {
-      "resources": ["inject.js", "autosave.js", "selection.js", "panel-autohide.js", "snapping.js", "taskbar.js", "split.js"],
+      "resources": ["inject.js", "autosave.js", "selection.js", "panel-autohide.js", "snapping.js", "taskbar.js", "split.js", "land-types.js", "land-type-ui.js", "dxf-export.js"],
       "matches": ["https://3dg.vn/*", "https://*.3dg.vn/*"]
     }
   ],
