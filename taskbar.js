@@ -50,6 +50,25 @@
         }
     ];
 
+    // ── Selection mode group config ───────────────────────────
+    // These are rendered as a separate button group with radio behavior
+    const selectionModes = [
+        {
+            id: 'sel-rectangle',
+            icon: '\uD83D\uDD32',
+            label: 'Rectangle',
+            title: 'Ch\u1ECDn b\u1EB1ng Rectangle (Shift+Drag)',
+            mode: 'rectangle'
+        },
+        {
+            id: 'sel-polygon',
+            icon: '\u2B20',
+            label: 'Polygon',
+            title: 'Ch\u1ECDn b\u1EB1ng Polygon (Shift+Click)',
+            mode: 'polygon'
+        }
+    ];
+
     // ── CSS injection ─────────────────────────────────────────
     function injectStyle() {
         const STYLE_ID = '__3dg-taskbar-style';
@@ -139,6 +158,81 @@
     background: #d6eaff;
 }
 
+/* ═══ Separator ═══════════════════════════════════ */
+#__3dg-taskbar .tb-sep {
+    width: 1px;
+    height: 20px;
+    background: rgba(0,0,0,0.10);
+    margin: 0 4px;
+    flex-shrink: 0;
+}
+
+/* ═══ Selection mode group ════════════════════════ */
+#__3dg-taskbar .tb-sel-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 1px;
+    background: #f5f5f5;
+    border-radius: 6px;
+    padding: 2px;
+}
+#__3dg-taskbar .tb-sel-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    background: transparent;
+    color: #666;
+    cursor: pointer;
+    font-size: 12px;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    white-space: nowrap;
+    user-select: none;
+    transition: all 0.15s ease;
+}
+#__3dg-taskbar .tb-sel-btn:hover {
+    background: rgba(255,255,255,0.8);
+    color: #333;
+}
+#__3dg-taskbar .tb-sel-btn.--active {
+    background: #fff;
+    border-color: #9333ea;
+    color: #9333ea;
+    font-weight: 600;
+    box-shadow: 0 1px 3px rgba(147,51,234,0.15);
+}
+#__3dg-taskbar .tb-sel-btn .tb-sel-icon {
+    font-size: 13px;
+}
+#__3dg-taskbar .tb-rule-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 3px 7px;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    background: transparent;
+    color: #999;
+    cursor: pointer;
+    font-size: 11px;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    white-space: nowrap;
+    user-select: none;
+    transition: all 0.15s ease;
+}
+#__3dg-taskbar .tb-rule-btn:hover {
+    background: #f0f0f0;
+    color: #666;
+}
+#__3dg-taskbar .tb-rule-btn.--active {
+    background: #e8f4f8;
+    border-color: #0891b2;
+    color: #0891b2;
+    font-weight: 600;
+}
+
 /* ═══ Pin status badge ════════════════════════════ */
 #__3dg-taskbar .tb-pin-badge {
     display: none;
@@ -191,14 +285,117 @@
         return btn;
     }
 
+    // ── Create selection mode group ─────────────────────────────
+    function createSelectionGroup() {
+        var group = document.createElement('div');
+        group.className = 'tb-sel-group';
+        group.id = '__3dg-sel-group';
+
+        // Mode buttons (radio behavior)
+        for (var i = 0; i < selectionModes.length; i++) {
+            (function (cfg) {
+                var btn = document.createElement('button');
+                btn.className = 'tb-sel-btn';
+                btn.id = '__3dg-btn-' + cfg.id;
+                btn.setAttribute('title', cfg.title);
+                btn.setAttribute('type', 'button');
+
+                var iconEl = document.createElement('span');
+                iconEl.className = 'tb-sel-icon';
+                iconEl.textContent = cfg.icon;
+                btn.appendChild(iconEl);
+
+                var labelEl = document.createElement('span');
+                labelEl.textContent = cfg.label;
+                btn.appendChild(labelEl);
+
+                // Set initial active state
+                var currentMode = window.__selectionMode || 'rectangle';
+                if (currentMode === cfg.mode) btn.classList.add('--active');
+
+                btn.addEventListener('click', function (e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (window.__setSelectionMode) {
+                        window.__setSelectionMode(cfg.mode);
+                    }
+                    // Update radio state for all mode buttons
+                    updateSelectionGroupState();
+                });
+
+                group.appendChild(btn);
+            })(selectionModes[i]);
+        }
+
+        return group;
+    }
+
+    // ── Create rule toggle button ─────────────────────────────
+    function createRuleToggle() {
+        var btn = document.createElement('button');
+        btn.className = 'tb-rule-btn';
+        btn.id = '__3dg-btn-sel-rule';
+        btn.setAttribute('type', 'button');
+        btn.setAttribute('title', 'Toggle: Intersects / Contains');
+        updateRuleBtnText(btn);
+
+        btn.addEventListener('click', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            if (window.__toggleSelectionRule) {
+                window.__toggleSelectionRule();
+            }
+            setTimeout(function () {
+                updateRuleBtnText(btn);
+            }, 50);
+        });
+
+        return btn;
+    }
+
+    function updateRuleBtnText(btn) {
+        if (!btn) btn = document.getElementById('__3dg-btn-sel-rule');
+        if (!btn) return;
+        var rule = window.__selectionRule || 'intersects';
+        btn.textContent = rule === 'intersects' ? '\u2229 Intersects' : '\u2282 Contains';
+        btn.classList.toggle('--active', rule === 'contains');
+    }
+
+    function updateSelectionGroupState() {
+        var currentMode = window.__selectionMode || 'rectangle';
+        for (var i = 0; i < selectionModes.length; i++) {
+            var cfg = selectionModes[i];
+            var btn = document.getElementById('__3dg-btn-' + cfg.id);
+            if (btn) btn.classList.toggle('--active', currentMode === cfg.mode);
+        }
+    }
+
+    // Expose updater for selection.js to call
+    window.__updateTaskbarSelectionState = function () {
+        updateSelectionGroupState();
+        updateRuleBtnText();
+    };
+
     // ── Create the taskbar element ────────────────────────────
     function createTaskbar() {
         const bar = document.createElement('div');
         bar.id = '__3dg-taskbar';
 
+        // Action buttons (undo, redo, split)
         for (let i = 0; i < actions.length; i++) {
             bar.appendChild(createButton(actions[i]));
         }
+
+        // Separator
+        var sep1 = document.createElement('div');
+        sep1.className = 'tb-sep';
+        bar.appendChild(sep1);
+
+        // Selection mode group
+        bar.appendChild(createSelectionGroup());
+
+        // Rule toggle
+        bar.appendChild(createRuleToggle());
 
         // Pin status badge (shown only when pinned)
         const badge = document.createElement('span');

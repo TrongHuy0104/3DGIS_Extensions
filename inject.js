@@ -325,6 +325,15 @@ function initCtrlZ() {
                     .find(i => typeof i.removeLastPoint === 'function' && i.sketchFeature_ != null);
                 if (activeDraw) { activeDraw.removeLastPoint(); olMap.render(); return; }
 
+                // Undo selection change (polygon/rectangle selection history)
+                if (window.__selectionHistory && window.__selectionHistory.length > 0 && window.__undoSelection) {
+                    if (window.__undoSelection()) {
+                        console.log('[CtrlZ] ↩️ Undo selection change');
+                        olMap.render();
+                        return;
+                    }
+                }
+
                 // Kiểm tra __undoStack (bulk delete từ selection, v.v.)
                 if (window.__undoStack && window.__undoStack.length > 0) {
                     const undoEntry = window.__undoStack.pop();
