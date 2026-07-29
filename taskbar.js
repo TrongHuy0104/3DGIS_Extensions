@@ -42,7 +42,7 @@
         {
             id: 'split',
             icon: '\u2702',
-            title: 'Chia \u0111\u01b0\u1eddng (Alt+S)',
+            title: 'Chia \u0111\u01b0\u1eddng (Alt+S) \u2014 Click giao \u0111i\u1ec3m \u0111\u1ec3 c\u1eaft, Esc tho\u00e1t',
             shortcut: 'Alt+S',
             toggle: true,
             isActive: function () { return !!window.__splitToolActive; },
@@ -137,6 +137,13 @@
 }
 #__3dg-taskbar .tb-btn.--active:hover {
     background: #d6eaff;
+}
+@keyframes __3dg-tb-pulse {
+    0%, 100% { box-shadow: 0 0 0 2px rgba(22, 119, 255, 0.15); }
+    50% { box-shadow: 0 0 0 4px rgba(22, 119, 255, 0.25); }
+}
+#__3dg-taskbar .tb-btn.--active {
+    animation: __3dg-tb-pulse 2s ease-in-out infinite;
 }
 
 /* ═══ Pin status badge ════════════════════════════ */

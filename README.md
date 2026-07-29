@@ -22,7 +22,8 @@
 | `Ctrl + B` | Bật/tắt panel "Biên tập dữ liệu" |
 | `Ctrl + Alt + T` | Pin/Unpin taskbar |
 | `Alt + S` | Bật/tắt Split Tool |
-| `Shift + Kéo thả` | Chọn vùng tìm giao điểm *(trong Split mode)* |
+| `Esc` | Thoát Split Tool *(khi đang bật)* |
+| `Shift + Kéo thả` | Chọn vùng features *(Box Selection)* |
 
 ---
 
@@ -52,11 +53,9 @@ Tự động lưu dữ liệu bản đồ định kỳ.
 
 Chọn nhiều features cùng lúc bằng cách kéo thả.
 
-- **Shift + Kéo thả**: Vẽ hình chữ nhật chọn vùng *(khi KHÔNG ở Split mode)*
+- **Shift + Kéo thả**: Vẽ hình chữ nhật chọn vùng
 - Highlight features được chọn (xanh dương)
 - Floating toolbar: xóa, bỏ chọn, export
-
-> ⚠️ Khi Split Tool đang bật, Shift + Kéo thả sẽ chọn vùng tìm giao điểm thay vì bôi vùng xóa.
 
 ---
 
@@ -64,45 +63,42 @@ Chọn nhiều features cùng lúc bằng cách kéo thả.
 
 Chia đường (LineString) tại giao điểm với các đường khác.
 
-#### Quy trình sử dụng:
+#### Quy trình sử dụng (Click-to-Split):
 
 ```
 1. Bật Split Tool
    └─ Nhấn Alt+S hoặc click nút ✂ trên taskbar
 
-2. Chọn vùng tìm giao điểm
-   └─ Shift + Kéo thả trên bản đồ
-   └─ Hình chữ nhật nét đứt xanh hiện khi kéo
-   └─ Thả chuột → tìm giao điểm trong vùng
+2. Di chuyển chuột trên bản đồ
+   └─ Giao điểm trong bán kính ~80px quanh con trỏ tự động phát hiện
+   └─ Chấm cam (●) hiện tại các giao điểm tìm được
+   └─ Giao điểm gần nhất nhấp nháy xanh dương (sẵn sàng cắt)
+   └─ Đường gần con trỏ highlight xanh
 
-3. Xem giao điểm
-   └─ Các chấm cam (●) hiện tại vị trí giao nhau
-   └─ Di chuột gần chấm cam → đường gần nhất highlight
+3. Click để cắt
+   └─ Click vào giao điểm đang nhấp nháy → đường bị chia thành 2 phần
+   └─ Toast xác nhận + hướng dẫn Ctrl+Z để hoàn tác
 
-4. Cắt đường
-   └─ Double-click vào gần chấm cam để split
-   └─ Đường bị chia thành 2 phần
+4. Tiếp tục cắt
+   └─ Di chuột sang giao điểm khác và click tiếp
+   └─ Không cần chọn vùng hay thao tác thêm
 
-5. Tiếp tục cắt
-   └─ Các chấm cam khác VẪN CÒN sau khi cắt
-   └─ Có thể cắt đường khác tại cùng giao điểm
-   └─ Shift + Kéo thả lại để chọn vùng mới
-
-6. Tắt Split Tool
-   └─ Nhấn Alt+S hoặc click nút ✂ lần nữa
+5. Thoát Split Tool
+   └─ Nhấn Esc hoặc Alt+S hoặc click nút ✂ lần nữa
 ```
 
-#### Màu highlight khi hover:
+#### Màu highlight:
 
 | Màu | Ý nghĩa |
 |---|---|
-| 🔵 **Xanh dương (cyan)** | Đường chưa cắt |
-| 🟢 **Xanh lá (green)** | Đường đã được cắt (split result) |
-| 🟠 **Chấm cam** | Giao điểm — double-click để cắt |
+| 🟠 **Chấm cam** | Giao điểm phát hiện được (trong bán kính) |
+| 🔵 **Chấm xanh dương nhấp nháy** | Giao điểm gần nhất — click để cắt |
+| 🔵 **Đường xanh dương (cyan)** | Đường chưa cắt (đang hover) |
+| 🟢 **Đường xanh lá (green)** | Đường đã được cắt |
 
 #### Lưu ý:
-- Chỉ tìm giao điểm trong **vùng đã chọn** (không scan toàn bản đồ → tránh lag)
-- Marker giao điểm **giữ lại** sau khi cắt — vẫn dùng được cho đường khác
+- Giao điểm được phát hiện **tự động** khi di chuột (không cần chọn vùng)
+- Chỉ quét trong **bán kính quanh con trỏ** → không lag với dữ liệu lớn
 - Hỗ trợ **Undo** split (Ctrl + Z)
 
 ---
